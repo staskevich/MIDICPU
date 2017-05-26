@@ -10,7 +10,6 @@ http://creativecommons.org/licenses/by/4.0/
 
 
 A public CircuitHub project is available for on-demand manufacturing:
-
 https://circuithub.com/projects/CodeandCopper1/MIDICPU
 
 
