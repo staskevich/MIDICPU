@@ -32,8 +32,9 @@
 		GLOBAL	send_midi_local
 
 
-txutils		code	0x0F58
-;txutils		code
+;txutils		code	0x0F58
+;txutils		code	0x1462
+txutils		code
 
 
 ; =================================
@@ -43,6 +44,16 @@ txutils		code	0x0F58
 ; =================================
 
 send_midi_local
+
+		pagesel	send_midi_local_x
+		goto	send_midi_local_x
+
+send_midi_local_return
+		return
+
+txutils_x	code	0x1490
+
+send_midi_local_x
 ; wrap LOCAL_D0 and LOCAL_D1 above 127
 		movfw	LOCAL_D0
 		andlw	B'01111111'
@@ -51,13 +62,6 @@ send_midi_local
 		andlw	B'01111111'
 		movwf	LOCAL_D1
 
-; suspend T2 interrupts
-;		banksel	PIE1
-;		bcf		PIE1,1
-;		banksel	PORTA
-; reset midi active sense timer
-;		movlw	T2_SCALE
-;		movwf	T2_COUNTER
 ; send status byte if necessary
 ; treat SysEx separately
 		movlw	0xF0
@@ -167,11 +171,23 @@ send_midi_local_skip_remap
 send_midi_local_sysex
 ; don't save the outbound status so that inbound sysex don't accidentally get merged.
 		clrf	OUTBOUND_STATUS
+send_midi_local_sysex_raw_data
+; send some raw data from MIDI CPU data registers and nothing else, if flagged.
+		btfss	LOCAL_SYSEX_FLAGS,3
+		goto	send_midi_local_sysex_begin
+		movfw	LOCAL_D0
+		movwf	OUTBOUND_BYTE
+		call	send_midi_byte
+		goto	send_midi_local_done2
+send_midi_local_sysex_begin
+; skip begin status byte unless flags say so
+		btfss	LOCAL_SYSEX_FLAGS,0
+		goto	send_midi_local_sysex_data
 ; header status
 		movfw	LOCAL_STATUS
 		movwf	OUTBOUND_BYTE
 		call	send_midi_byte
-
+send_midi_local_sysex_data
 		movfw	LOCAL_D0
 ;		andlw	B'01111111'
 ;		banksel	EEADR
@@ -183,6 +199,7 @@ send_midi_local_sysex
 		bcf		STATUS,RP1
 
 		movfw	LOCAL_D1
+		bz	send_midi_local_sysex_end
 ;		andlw	B'01111111'
 		movwf	COUNTER_L
 ; body data
@@ -208,6 +225,10 @@ send_midi_local_sysex_loop
 		bcf		STATUS,RP1
 		decfsz	COUNTER_L,f
 		goto	send_midi_local_sysex_loop
+send_midi_local_sysex_end
+; skip end status byte unless flags say so
+		btfss	LOCAL_SYSEX_FLAGS,2
+		goto	send_midi_local_done2
 ; footer status
 		movlw	0xF7
 ;		movwf	OUTBOUND_STATUS
@@ -215,22 +236,81 @@ send_midi_local_sysex_loop
 		call	send_midi_byte
 
 send_midi_local_done
+; update local message registers as necessary.
+send_midi_local_done_check_note
+		movfw	LOCAL_STATUS
+		andlw	B'11110000'
+		sublw	0x90
+		bnz	send_midi_local_done_check_cc
+		movfw	LOCAL_D0
+		movwf	LAST_NOTE_NUM
+		movfw	LOCAL_D1
+		movwf	LAST_NOTE_VELOCITY
+		goto	send_midi_local_done_check_done
+
+send_midi_local_done_check_cc
+		movfw	LOCAL_STATUS
+		andlw	B'11110000'
+		sublw	0xB0
+		bnz	send_midi_local_done_check_pc
+		movfw	LOCAL_D0
+		movwf	LAST_CC_NUM
+		movfw	LOCAL_D1
+		movwf	LAST_CC_VALUE
+		goto	send_midi_local_done_check_done
+
+send_midi_local_done_check_pc
+		movfw	LOCAL_STATUS
+		andlw	B'11110000'
+		sublw	0xC0
+		bnz	send_midi_local_done_check_done
+		movfw	LOCAL_D0
+		movwf	LAST_PC_NUM
+
+send_midi_local_done_check_done
 ; merge if necessary.
 		pagesel	process_inbound_midi
 		call	process_inbound_midi
 		pagesel	send_midi_local_done
-; resume T2 interrupts
-;		banksel	PIE1
-;		bsf		PIE1,1
-;		banksel	PORTA
 
-		return
+; if throttling message generation, keep processing MIDI before resuming.
+		movfw	MESSAGE_THROTTLE
+		bz	send_midi_local_done2
 
-; =================================
-;
-; send a MIDI byte
-;
-; =================================
+		movwf	MESSAGE_THROTTLE_COUNTER
+message_throttle_loop
+		movlw	0xFF
+		movwf	MESSAGE_THROTTLE_COUNTER_2
+message_throttle_loop_2
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+; merge if necessary.
+		pagesel	process_inbound_midi
+		call	process_inbound_midi
+		pagesel	send_midi_local_done
+
+		decfsz	MESSAGE_THROTTLE_COUNTER_2,f
+		goto	message_throttle_loop_2
+		decfsz	MESSAGE_THROTTLE_COUNTER,f
+		goto	message_throttle_loop
+
+send_midi_local_done2
+		pagesel	send_midi_local
+		goto	send_midi_local_return
 
 send_midi_byte
 ; reset the active sense counter
@@ -272,6 +352,5 @@ activity_blink
 		bcf		STATUS,RP0
 
 		return
-
 
 		end

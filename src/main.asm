@@ -42,7 +42,6 @@
 		EXTERN	combine_channel_with_status
 		EXTERN	load_d0_from_address
 		EXTERN	load_d1_from_address
-		EXTERN	send_midi_byte
 		EXTERN	send_midi_local
 		EXTERN	read_logic_inputs
 		EXTERN	read_matrices
@@ -171,44 +170,6 @@ checksum_loop
 		movlw	0x1C
 		subwf	EEADRH,w
 		bnz		checksum_loop
-; sum value is now in TEMP2,TEMP
-; store for debugging
-; high byte
-;		movfw	TEMP2
-;		movwf	EEDAT
-;		movlw	PROM_CHECKSUM_TEST
-;		movwf	EEADR
-;		banksel	EECON1
-;		bcf		EECON1,EEPGD
-;		bsf		EECON1,WREN
-;		movlw	0x55
-;		movwf	EECON2
-;		movlw	0xAA
-;		movwf	EECON2
-;		bsf		EECON1,WR
-; wait for write complete
-;		banksel	PIR2
-;		btfss	PIR2,EEIF
-;		goto	$-1
-;		bcf		PIR2,EEIF
-; low byte
-;		banksel	EEADR
-;		movfw	TEMP
-;		movwf	EEDAT
-;		incf	EEADR,f
-;		banksel	EECON1
-;		bsf		EECON1,WREN
-;		movlw	0x55
-;		movwf	EECON2
-;		movlw	0xAA
-;		movwf	EECON2
-;		bsf		EECON1,WR
-; wait for write complete
-;		banksel	PIR2
-;		btfss	PIR2,EEIF
-;		goto	$-1
-;		bcf		PIR2,EEIF
-
 ; add in checksum from EEPROM and check for 0
 		banksel	EEADR
 		movlw	PROM_CHECKSUM
@@ -271,9 +232,9 @@ checksum_error_blink
 		goto	$-3
 		goto	checksum_error_blink
 
-
+; Can't change this address--it's referenced from boot code!
 main_normal	code	0x0E00
-;main_normal	code
+; main_normal	code
 start_normal
 ; ==================================================================
 ;
@@ -296,6 +257,15 @@ start_normal
 poll
 ; always check to see if a MIDI CPU-specific SysEx message is being
 ; processed.  If so, don't bother to process any inputs.
+
+; take a snapshot of layer flags and work from that.
+		movfw	LAYER_FLAGS
+		movwf	LAYER_FLAGS_SNAPSHOT
+
+; check for global refresh request.
+; if there is a request, set the "go flag"
+		btfsc	STATE_FLAGS_2,5
+		bsf	STATE_FLAGS_2,6
 
 ; catch up on any incoming midi data
 		pagesel	process_inbound_midi
@@ -329,7 +299,15 @@ poll
 		pagesel	poll
 ; process matrixed inputs
 		btfss	STATE_FLAGS,1
+		pagesel	read_matrices
 		call	read_matrices
+		pagesel	poll
+
+; if a global refresh just happened, clear the flags.
+		btfss	STATE_FLAGS_2,6
+		goto	poll
+		bcf	STATE_FLAGS_2,5
+		bcf	STATE_FLAGS_2,6
 
 		goto	poll
 

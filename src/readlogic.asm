@@ -26,13 +26,19 @@
 		EXTERN	process_inbound_midi
 		EXTERN	main_init
 		EXTERN	read_pin_config
+		EXTERN	read_reg_config
 		EXTERN	combine_channel_with_status
 		EXTERN	load_d0_from_address
 		EXTERN	load_d1_from_address
 		EXTERN	add_to_d0_from_d1_address
-		EXTERN	point_to_d0_address
 		EXTERN	send_midi_byte
 		EXTERN	send_midi_local
+		EXTERN	go_reg_increment
+		EXTERN	go_reg_decrement
+		EXTERN	go_reg_sum
+		EXTERN	go_reg_copy
+		EXTERN	go_reg_store_value
+		EXTERN	go_reg_bit_op
 
 ; ==================================================================
 ;
@@ -43,21 +49,26 @@
 		GLOBAL	read_logic_inputs
 
 
-read_logic		code	0x0A60
-;read_logic		code
+;read_logic		code	0x0A60
+read_logic		code
 
 
 read_logic_inputs
 ; no interference yet
 		bcf		STATE_FLAGS,2
+; ===============================================
 ; Pins 0-7
+; ===============================================
 		clrf	OUTPUT_COUNTER
-; store the input states to TEMP
+; store the old input states to TEMP4
+		movfw	DIGITAL_0
+		movwf	TEMP4
+; store the new input states to TEMP, DIGITAL_0
 		movfw	PORTD
 		movwf	TEMP
-		movwf	TEMP4
+		movwf	DIGITAL_0
 ; store the change flags to TEMP2
-		xorwf	DIGITAL_0,w
+		xorwf	TEMP4,w
 		movwf	TEMP2
 ; update the toggles, copy to TEMP3
 		comf	TEMP,w
@@ -74,35 +85,33 @@ read_logic_inputs
 		return
 ; process the encoder inputs
 		clrf	OUTPUT_COUNTER
-		movfw	TEMP4
-		movwf	TEMP
-		xorwf	DIGITAL_0,w
-		movwf	TEMP2
 		movfw	DIGITAL_0
+		movwf	TEMP
+		xorwf	TEMP4,w
+		movwf	TEMP2
+		movfw	TEMP4
 		movwf	TEMP3
-		movlw	ENCODER_0
+		movlw	MULTI_0
 		movwf	ANALOG_INPUT
 ; for continuous note stuff
 		movlw	ENCODER_CN_GATES_0
 		movwf	TEMP_REG
 		call	read_encoder_byte
-; save the new input states
-		movfw	TEMP4
-		movwf	DIGITAL_0
 
-
-;		return
-
-
+; ===============================================
 ; Pins 8-15
+; ===============================================
 		movlw	D'8'
 		movwf	OUTPUT_COUNTER
-; store the input states to TEMP
+; store the old input states to TEMP4
+		movfw	DIGITAL_1
+		movwf	TEMP4
+; store the new input states to TEMP, DIGITAL_1
 		movfw	PORTB
 		movwf	TEMP
-		movwf	TEMP4
+		movwf	DIGITAL_1
 ; store the change flags to TEMP2
-		xorwf	DIGITAL_1,w
+		xorwf	TEMP4,w
 		movwf	TEMP2
 ; update the toggles, copy to TEMP3
 		comf	TEMP,w
@@ -120,27 +129,28 @@ read_logic_inputs
 ; process the encoder inputs
 		movlw	D'8'
 		movwf	OUTPUT_COUNTER
-		movfw	TEMP4
-		movwf	TEMP
-		xorwf	DIGITAL_1,w
-		movwf	TEMP2
 		movfw	DIGITAL_1
+		movwf	TEMP
+		xorwf	TEMP4,w
+		movwf	TEMP2
+		movfw	TEMP4
 		movwf	TEMP3
-		movlw	ENCODER_4
+		movlw	MULTI_4
 		movwf	ANALOG_INPUT
 ; for continuous note stuff
 		movlw	ENCODER_CN_GATES_1
 		movwf	TEMP_REG
 		call	read_encoder_byte
-; save the new input states
-		movfw	TEMP4
-		movwf	DIGITAL_1
 
-
+; ===============================================
 ; Pins 16-23
+; ===============================================
 		movlw	D'16'
 		movwf	OUTPUT_COUNTER
-; store the input states to TEMP
+; store the old input states to TEMP4
+		movfw	DIGITAL_2
+		movwf	TEMP4
+; store the new input states to TEMP, DIGITAL_2
 		movfw	PORTA
 		movwf	TEMP2
 
@@ -161,9 +171,9 @@ read_logic_inputs
 		andlw	B'11100000'
 		iorwf	TEMP,f
 		movfw	TEMP
-		movwf	TEMP4
+		movwf	DIGITAL_2
 ; store the change flags to TEMP2
-		movfw	DIGITAL_2
+		movfw	TEMP4
 		xorwf	TEMP,w
 		movwf	TEMP2
 ; update the toggles, copy to TEMP3
@@ -182,21 +192,18 @@ read_logic_inputs
 ; process the encoder inputs
 		movlw	D'16'
 		movwf	OUTPUT_COUNTER
-		movfw	TEMP4
-		movwf	TEMP
-		xorwf	DIGITAL_2,w
-		movwf	TEMP2
 		movfw	DIGITAL_2
+		movwf	TEMP
+		xorwf	TEMP4,w
+		movwf	TEMP2
+		movfw	TEMP4
 		movwf	TEMP3
-		movlw	ENCODER_8
+		movlw	MULTI_8
 		movwf	ANALOG_INPUT
 ; for continuous note stuff
 		movlw	ENCODER_CN_GATES_2
 		movwf	TEMP_REG
 		call	read_encoder_byte
-; save the new input states
-		movfw	TEMP4
-		movwf	DIGITAL_2
 
 		return
 
@@ -218,8 +225,14 @@ read_trigger_byte
 		movwf	COUNTER_H
 read_trigger_bit
 		rrf		TEMP2,f
-		btfss	STATUS,C
-		goto	read_trigger_bit_unchanged
+		btfsc	STATUS,C
+		goto	read_trigger_bit_changed
+; if executing global refresh, treat every bit as changed.
+		btfsc	STATE_FLAGS_2,6
+		goto	read_trigger_bit_changed
+read_trigger_bit_unchanged
+		rrf		TEMP,f
+		goto	read_trigger_bit_next
 read_trigger_bit_changed
 ; assume this is a falling-edge transition
 		bcf		STATE_FLAGS,6
@@ -230,10 +243,18 @@ read_trigger_bit_set
 ; this is a rising-edge transition
 		bsf		STATE_FLAGS,6
 rtbc_prepare_loop
-		clrf	CONFIG_LAYER
 		movlw	0x04
 		movwf	COUNTER_L
+		clrf	CONFIG_LAYER
+; set up the layer flag bitmask in TEMP7
+		movlw	B'00000001'
+		movwf	TEMP7
 rtbc_layer_loop
+; skip this layer if layer flag is clear.
+		movfw	LAYER_FLAGS_SNAPSHOT
+		andwf	TEMP7,w
+		bz	rtbc_next_layer
+; grab the pin config for this layer
 		call	read_pin_config
 rtbc_check_mode_type
 ; skip if not a trigger input
@@ -297,32 +318,94 @@ rtbc_check_cc_toggle
 		movlw	0xB0
 		movwf	LOCAL_STATUS
 ; set up d1 with CC on/off values
-		bsf		STATUS,RP1
-		movfw	CC_ON_VALUE
+		movfw	CC_ON_VALUE_X
 		btfsc	TEMP3,0
-		movfw	CC_OFF_VALUE
-		bcf		STATUS,RP1
+		movfw	CC_OFF_VALUE_X
 		movwf	LOCAL_D1
 		goto	rtbc_get_data_d0_only
 rtbc_check_pitch_wheel
 		movlw	B'00100100'
 		andwf	CONFIG_MODE,w
-		bnz		rtbc_check_sysex
+		bnz		rtbc_check_sysex_full
 		movlw	0xE0
 		movwf	LOCAL_STATUS
 		goto	rtbc_get_data
-rtbc_check_sysex
+
+; ====================================
+;
+; for local sysex generation, LOCAL_SYSEX_FLAGS bits are:
+; 0: send a F0 sysex begin byte
+; 1: send data bytes from sysex data buffer
+; 2: send a F7 sysex end byte
+; 3: send raw data from MIDI CPU data registers
+;
+; ====================================
+rtbc_check_sysex_full
 		movlw	0x5C
 		subwf	CONFIG_MODE,w
-		bnz		rtbc_check_midi_start
+		bnz	rtbc_check_sysex_begin
 		movlw	0xF0
 		movwf	LOCAL_STATUS
 		movfw	CONFIG_D0
 		movwf	LOCAL_D0
 		movfw	CONFIG_D1
 		movwf	LOCAL_D1
+; tell send_midi_local to send begin, data, and end bytes
+		movlw	B'00000111'
+		movwf	LOCAL_SYSEX_FLAGS
 		call	send_midi_local
 		goto	rtbc_next_layer
+rtbc_check_sysex_begin
+		movlw	0x5D
+		subwf	CONFIG_MODE,w
+		bnz	rtbc_check_sysex_raw_data
+		movlw	0xF0
+		movwf	LOCAL_STATUS
+		movfw	CONFIG_D0
+		movwf	LOCAL_D0
+		movfw	CONFIG_D1
+		movwf	LOCAL_D1
+; tell send_midi_local to send begin and data bytes
+		movlw	B'00000011'
+		movwf	LOCAL_SYSEX_FLAGS
+		call	send_midi_local
+		goto	rtbc_next_layer_nomerge
+rtbc_check_sysex_raw_data
+		movlw	0x5E
+		subwf	CONFIG_MODE,w
+		bnz	rtbc_check_sysex_end
+		movlw	0xF0
+		movwf	LOCAL_STATUS
+; load a data byte from a register
+		call	load_d0_from_address
+		bcf	LOCAL_D0,7
+; tell send_midi_local to send raw data only
+		movlw	B'00001000'
+		movwf	LOCAL_SYSEX_FLAGS
+		call	send_midi_local
+		goto	rtbc_next_layer_nomerge
+rtbc_check_sysex_end
+		movlw	0x5F
+		subwf	CONFIG_MODE,w
+		bnz	rtbc_check_global_refresh_flag
+		movlw	0xF0
+		movwf	LOCAL_STATUS
+		movfw	CONFIG_D0
+		movwf	LOCAL_D0
+		movfw	CONFIG_D1
+		movwf	LOCAL_D1
+; tell send_midi_local to send data and end bytes
+		movlw	B'00000110'
+		movwf	LOCAL_SYSEX_FLAGS
+		call	send_midi_local
+		goto	rtbc_next_layer
+
+rtbc_check_global_refresh_flag
+; if global refresh is happening, ignore the modes below.
+; avoids refresh infinite loop and unwanted data changes
+		btfsc	STATE_FLAGS_2,6
+		goto	rtbc_next_layer
+
 rtbc_check_midi_start
 		movlw	0x64
 		subwf	CONFIG_MODE,w
@@ -333,7 +416,9 @@ rtbc_go_midi_start
 ; send the message
 		movlw	0xFA
 		movwf	OUTBOUND_BYTE
+		pagesel	send_midi_byte
 		call	send_midi_byte
+		pagesel	read_logic_inputs
 		goto	rtbc_next_layer
 rtbc_check_midi_stop
 		movlw	0x65
@@ -345,7 +430,9 @@ rtbc_go_midi_stop
 ; send the message
 		movlw	0xFC
 		movwf	OUTBOUND_BYTE
+		pagesel	send_midi_byte
 		call	send_midi_byte
+		pagesel	read_logic_inputs
 		goto	rtbc_next_layer
 rtbc_check_midi_run_toggle
 		movlw	0x66
@@ -361,7 +448,9 @@ rtbc_check_midi_clock
 		bnz		rtbc_check_an_cn
 		movlw	0xF8
 		movwf	OUTBOUND_BYTE
+		pagesel	send_midi_byte
 		call	send_midi_byte
+		pagesel	read_logic_inputs
 		goto	rtbc_next_layer
 rtbc_check_an_cn
 ; set up an offset & bitmask for use by all continuous note modes
@@ -450,113 +539,61 @@ rtbc_check_midi_reset
 		movlw	0x7E
 		subwf	CONFIG_MODE,w
 		bnz		rtbc_check_increment
+rtbc_go_midi_reset
 		movlw	0xFF
 		movwf	OUTBOUND_BYTE
+		pagesel	send_midi_byte
 		call	send_midi_byte
+		pagesel	read_logic_inputs
 		goto	rtbc_next_layer
 
 rtbc_check_increment
 		movlw	0x70
 		subwf	CONFIG_MODE,w
-		bnz		rtbc_check_decrement
-; check for invalid register address
-		movfw	CONFIG_D0
-		sublw	MAX_REGISTER
-		bnc		rtbc_next_layer
-; set up register address
-		call	point_to_d0_address
-; check for overflow -- use ANALOG_INPUT temproarily
-		movfw	INDF
-		movwf	ANALOG_INPUT
-		movfw	CONFIG_D1
-		addwf	ANALOG_INPUT,f
-		btfsc	ANALOG_INPUT,7
+		bnz	rtbc_check_decrement
+		call	go_reg_increment
 		goto	rtbc_next_layer
-; commit increment
-		movfw	ANALOG_INPUT
-		movwf	INDF
-		goto	rtbc_next_layer
-
 rtbc_check_decrement
 		movlw	0x71
 		subwf	CONFIG_MODE,w
-		bnz		rtbc_check_store_value
-; check for invalid register address
-		movfw	CONFIG_D0
-		sublw	MAX_REGISTER
-		bnc		rtbc_next_layer
-; set up register address
-		call	point_to_d0_address
-; check for overflow -- use ANALOG_INPUT temproarily
-		movfw	INDF
-		movwf	ANALOG_INPUT
-		movfw	CONFIG_D1
-		subwf	ANALOG_INPUT,f
-		btfsc	ANALOG_INPUT,7
+		bnz	rtbc_check_sum
+		call	go_reg_decrement
 		goto	rtbc_next_layer
-; commit decrement
-		movfw	ANALOG_INPUT
-		movwf	INDF
+rtbc_check_sum
+		movlw	0x72
+		subwf	CONFIG_MODE,w
+		bnz	rtbc_check_copy
+		call	go_reg_sum
 		goto	rtbc_next_layer
-
+rtbc_check_copy
+		movlw	0x73
+		subwf	CONFIG_MODE,w
+		bnz	rtbc_check_store_value
+		call	go_reg_copy
+		goto	rtbc_next_layer
 rtbc_check_store_value
 		movlw	0x74
 		subwf	CONFIG_MODE,w
-		bnz		rtbc_check_bit_op
-; check for invalid register address
-		movfw	CONFIG_D0
-		sublw	MAX_REGISTER
-		bnc		rtbc_next_layer
-; set up register address
-		call	point_to_d0_address
-		movfw	CONFIG_D1
-		movwf	INDF
+		bnz	rtbc_check_bit_op
+		call	go_reg_store_value
 		goto	rtbc_next_layer
-
 rtbc_check_bit_op
 		movlw	0x76
 		subwf	CONFIG_MODE,w
-		bnz		rtbc_mode_not_matched
-; check for invalid register address
-		movfw	CONFIG_D0
-		sublw	MAX_REGISTER
-		bnc		rtbc_next_layer
-; set up register address
-		call	point_to_d0_address
-; set up bitmask
-		movlw	B'00000001'
-		movwf	BITMASK
-; mask to counter
-		movlw	B'00000111'
-		andwf	CONFIG_D1,w
-		bz		rtbc_check_bit_op_loop_skip
-		movwf	TEMP5
-; shift to correct bit
-rtbc_check_bit_op_loop
-		bcf		STATUS,C
-		rlf		BITMASK,f
-		decfsz	TEMP5,f
-		goto	rtbc_check_bit_op_loop
-rtbc_check_bit_op_loop_skip
-		btfsc	CONFIG_D1,3
-		goto	rtbc_check_bit_op_set
-		btfss	CONFIG_D1,4
-		goto	rtbc_check_bit_op_clear
-rtbc_check_bit_op_toggle
-		movfw	BITMASK
-		andwf	INDF,w
-		bz		rtbc_check_bit_op_set
-rtbc_check_bit_op_clear
-		comf	BITMASK,w
-		andwf	INDF,f
-		goto	rtbc_next_layer
-rtbc_check_bit_op_set
-		movfw	BITMASK
-		iorwf	INDF,f
+		bnz	rtbc_check_global_refresh
+		call	go_reg_bit_op
 		goto	rtbc_next_layer
 
+rtbc_check_global_refresh
+		movlw	0x7D
+		subwf	CONFIG_MODE,w
+; if mode is matched, set the global refresh request flag.
+		btfsc	STATUS,Z
+;		goto	rtbc_go_midi_reset
+		bsf	STATE_FLAGS_2,5
+; 0x7E is the last mode to match (do nothing on 0x7F, anyway)
 rtbc_mode_not_matched
-		goto	read_trigger_bit_next
+		goto	rtbc_next_layer
 rtbc_get_data
 ; use literal value for D1
 		movfw	CONFIG_D1
@@ -580,15 +617,17 @@ rtbc_next_layer
 		pagesel	process_inbound_midi
 		call	process_inbound_midi
 		pagesel	read_logic_inputs
+rtbc_next_layer_nomerge
 ; bail out if relevant sysex message comes in.
 		btfsc	STATE_FLAGS,2
 		return
+; increment layer bitmask
+		bcf	STATUS,C
+		rlf	TEMP7,f
+; increment layer, finish after 4 layers
 		incf	CONFIG_LAYER,f
-		decfsz	COUNTER_L,f
+		btfss	CONFIG_LAYER,2
 		goto	rtbc_layer_loop
-
-read_trigger_bit_unchanged
-		rrf		TEMP,f
 read_trigger_bit_next
 ; if we were working with a rising edge, subtract 24 back out of OUTPUT_COUNTER
 		movlw	D'24'
@@ -627,8 +666,8 @@ read_trigger_bit_next_a
 read_encoder_byte
 		movlw	B'00000001'
 		movwf	BITMASK
-		bcf		STATE_FLAGS,6
-		bcf		STATUS,IRP
+		bcf	STATE_FLAGS,6
+		bcf	STATUS,IRP
 		clrf	CONFIG_LAYER
 		movlw	D'4'
 		movwf	COUNTER_H
@@ -639,7 +678,7 @@ reb_loop
 		movlw	B'11110000'
 		andwf	CONFIG_MODE,w
 		sublw	B'00010000'
-		bnz		reb_next
+		bnz	reb_next_encoder
 ; load previous value into LOCAL_D0 for continuous note mode
 		movfw	ANALOG_INPUT
 		movwf	FSR
@@ -654,11 +693,76 @@ reb_loop
 		comf	TEMP,w
 		andlw	B'00000011'
 		bnz		reb_no_change
-
+; encoder value has changed.  grab the register config and change the value.
+reb_change
+; use LOCAL_SYSEX_FLAGS as temp register
+		clrf	LOCAL_SYSEX_FLAGS
+; increment/decrement the value
+		movlw	0x20
+		subwf	ANALOG_INPUT,w
+		movwf	REG_ADDRESS
+		call	read_reg_config
+; point to the encoder stored value
+; ?? already done above?
+;		movfw	ANALOG_INPUT
+;		movwf	FSR
+;		bcf		STATUS,IRP
+; check for clockwise rotation
+		btfsc	TEMP3,0
+		goto	reb_co_increment
+; check for counter-clockwise rotation
+		btfsc	TEMP3,1
+		goto	reb_co_decrement
+		goto	reb_change_recorded
+reb_co_increment
+		movfw	INDF
+		subwf	REG_MAX,w
+		bz	reb_co_overflow
+		incf	INDF,f
+		bsf	LOCAL_SYSEX_FLAGS,0
+		goto	reb_change_recorded
+reb_co_overflow
+; overflow.  round robin?
+		btfss	REG_RR,0
+		goto	reb_change_recorded
+		movfw	REG_MIN
+		movwf	INDF
+		bsf	LOCAL_SYSEX_FLAGS,0
+		goto	reb_change_recorded
+reb_co_decrement
+		movfw	INDF
+		subwf	REG_MIN,w
+		bz		reb_co_underflow
+		decf	INDF,f
+		bsf	LOCAL_SYSEX_FLAGS,1
+		goto	reb_change_recorded
+reb_co_underflow
+; underflow.  round robin?
+		btfss	REG_RR,0
+		goto	reb_change_recorded
+		movfw	REG_MAX
+		movwf	INDF
+		bsf	LOCAL_SYSEX_FLAGS,1
+;		goto	reb_change_recorded
+reb_change_recorded
+; set up the layer loop
+		movlw	0x04
+		movwf	COUNTER_L
+		clrf	CONFIG_LAYER
+; set up the layer flag bitmask in TEMP7
+		movlw	B'00000001'
+		movwf	TEMP7
+reb_change_layer_loop
+; skip this layer if layer flag is clear.
+		movfw	LAYER_FLAGS_SNAPSHOT
+		andwf	TEMP7,w
+		bz	reb_change_next_layer
+; grab the pin config for this layer
+		call	read_pin_config
 reb_check_continuous_note_off
 		movlw	B'00001110'
 		andwf	CONFIG_MODE,w
-		bnz		reb_check_other
+		bnz		reb_skip_cn_off
 
 reb_check_cn_off_note_flag
 ; is there a note flag?  then send note-off
@@ -668,7 +772,7 @@ reb_check_cn_off_note_flag
 		bsf		STATUS,IRP
 		movfw	BITMASK
 		andwf	INDF,f
-		bz		reb_check_other
+		bz		reb_skip_cn_off
 ; clear the note flag
 		comf	BITMASK,w
 		andwf	INDF,f
@@ -678,33 +782,11 @@ reb_check_cn_off_note_flag
 		clrf	LOCAL_D1
 		call	combine_channel_with_status
 		call	send_midi_local
-
-; increment/decrement the value
-reb_check_other
-; point to the encoder stored value
-		movfw	ANALOG_INPUT
-		movwf	FSR
-		bcf		STATUS,IRP
-; if already at maximum, skip any increment
-		movlw	0x7F
-		subwf	INDF,w
-		bz		reb_co_ccw
-; check for clockwise rotation
-		btfss	TEMP3,0
-		incf	INDF,f
-reb_co_ccw
-; if already at zero, skip any decrement
-		movf	INDF,f
-		bz		reb_check_other_mode
-; check for counter-clockwise rotation
-		btfss	TEMP3,1
-		decf	INDF,f
-
-reb_check_other_mode
+reb_skip_cn_off
 reb_check_continuous_note_on
 		movlw	B'00001110'
 		andwf	CONFIG_MODE,w
-		bnz		reb_check_controller
+		bnz	reb_skip_cn_on
 reb_check_cn_gate_flag
 ; is there a gate flag? then send note on
 		movfw	TEMP_REG
@@ -712,7 +794,7 @@ reb_check_cn_gate_flag
 		bsf		STATUS,IRP
 		movfw	BITMASK
 		andwf	INDF,w
-		bz		reb_next
+		bz	reb_change_next_layer
 ; set the note flag
 		movlw	D'6'
 		addwf	FSR,f
@@ -735,8 +817,8 @@ reb_check_cn_gate_flag
 		movwf	LOCAL_STATUS
 		call	combine_channel_with_status
 		call	send_midi_local
-		goto	reb_next
-
+		goto	reb_change_next_layer
+reb_skip_cn_on
 reb_check_controller
 ; point FSR to encoder data value
 		movfw	ANALOG_INPUT
@@ -745,7 +827,7 @@ reb_check_controller
 ; check mode
 		movlw	B'00001010'
 		andwf	CONFIG_MODE,w
-		bnz		reb_check_program_change
+		bnz	reb_skip_controller
 		movlw	0xB0
 		movwf	LOCAL_STATUS
 		call	combine_channel_with_status
@@ -759,52 +841,61 @@ reb_check_controller
 ;		movwf	LOCAL_D1
 		call	load_d1_from_address
 		call	send_midi_local
-		goto	reb_next
-
+		goto	reb_change_next_layer
+reb_skip_controller
 reb_check_program_change
 		movlw	B'00001001'
 		andwf	CONFIG_MODE,w
-		bnz		reb_check_channel_pressure
+		bnz	reb_skip_program_change
 		movlw	0xC0
 		movwf	LOCAL_STATUS
 		goto	reb_send_generic
+reb_skip_program_change
 reb_check_channel_pressure
 		movlw	B'00001000'
 		andwf	CONFIG_MODE,w
-		bnz		reb_check_matrix_velocity
+		bnz	reb_skip_channel_pressure
 		movlw	0xD0
 		movwf	LOCAL_STATUS
 		goto	reb_send_generic
-
-reb_check_matrix_velocity
+reb_skip_channel_pressure
+reb_check_increment
 		movlw	0x1A
 		subwf	CONFIG_MODE,w
-		bnz		reb_check_cc_on_value
-		movfw	INDF
-		banksel	MATRIX_VELOCITY
-		movwf	MATRIX_VELOCITY
-		banksel	PORTA
-		goto	reb_next
-
-reb_check_cc_on_value
-		movlw	0x1B
-		subwf	CONFIG_MODE,w
-		bnz		reb_check_cc_off_value
-		movfw	INDF
-		banksel	CC_ON_VALUE
-		movwf	CC_ON_VALUE
-		banksel	PORTA
-		goto	reb_next
-
-reb_check_cc_off_value
+		bnz	reb_skip_increment
+		btfsc	LOCAL_SYSEX_FLAGS,0
+		call	go_reg_increment
+		btfsc	LOCAL_SYSEX_FLAGS,1
+		call	go_reg_decrement
+		goto	reb_change_next_layer
+reb_skip_increment
+;reb_check_sum
+;		movlw	0x1B
+;		subwf	CONFIG_MODE,w
+;		bnz	reb_skip_sum
+;		call	go_reg_sum
+;		goto	reb_change_next_layer
+;reb_skip_sum
+reb_check_copy
 		movlw	0x1C
 		subwf	CONFIG_MODE,w
-		bnz		reb_next
-		movfw	INDF
-		banksel	CC_OFF_VALUE
-		movwf	CC_OFF_VALUE
-		banksel	PORTA
-		goto	reb_next
+		bnz	reb_skip_copy
+		call	go_reg_copy
+		goto	reb_change_next_layer
+reb_skip_copy
+reb_check_store
+		movlw	0x1D
+		subwf	CONFIG_MODE,w
+		bnz	reb_skip_store
+		call	go_reg_store_value
+		goto	reb_change_next_layer
+reb_skip_store
+reb_check_bitop
+		movlw	0x1E
+		subwf	CONFIG_MODE,w
+		bnz	reb_change_next_layer
+		call	go_reg_bit_op
+		goto	reb_change_next_layer
 
 reb_send_generic
 		call	combine_channel_with_status
@@ -812,13 +903,46 @@ reb_send_generic
 ;		movwf	LOCAL_D0
 		call	load_d0_from_address
 		call	send_midi_local
-		goto	reb_next
+;		goto	reb_change_next_layer
+reb_change_next_layer
+		pagesel	process_inbound_midi
+		call	process_inbound_midi
+		pagesel	read_logic_inputs
+; bail out if relevant sysex message comes in.
+		btfsc	STATE_FLAGS,2
+		return
+; increment layer
+		incf	CONFIG_LAYER,f
+; increment layer bitmask
+		bcf	STATUS,C
+		rlf	TEMP7,f
+; decrement loop counter
+		decfsz	COUNTER_L,f
+		goto	reb_change_layer_loop
+		goto	reb_next_encoder
 
 reb_no_change
+; executing global refresh?  treat as a change without altering stored value.
+		btfsc	STATE_FLAGS_2,6
+		goto	reb_change_recorded
+; set up the layer loop
+		movlw	0x04
+		movwf	COUNTER_L
+		clrf	CONFIG_LAYER
+; set up the layer flag bitmask in TEMP7
+		movlw	B'00000001'
+		movwf	TEMP7
+reb_no_change_layer_loop
+; skip this layer if layer flag is clear.
+		movfw	LAYER_FLAGS_SNAPSHOT
+		andwf	TEMP7,w
+		bz	reb_no_change_next_layer
+; grab the pin config for this layer
+		call	read_pin_config
 ; continuous note mode?
 		movlw	B'11101110'
 		andwf	CONFIG_MODE,w
-		bnz		reb_next
+		bnz	reb_no_change_next_layer
 ; status 0x90 for sure
 		movlw	0x90
 		movwf	LOCAL_STATUS
@@ -830,13 +954,13 @@ reb_no_change_cn_gate
 		bsf		STATUS,IRP
 		movfw	BITMASK
 		andwf	INDF,w
-		bz		reb_no_change_cn_note
+		bz	reb_no_change_cn_note
 ; gate is on.  if note is off, send a note-on message.
 		movlw	D'6'
 		addwf	FSR,f
 		movfw	BITMASK
 		andwf	INDF,w
-		bnz		reb_next
+		bnz	reb_no_change_next_layer
 ; send note-on
 ; set the note_flag
 		movfw	BITMASK
@@ -850,7 +974,7 @@ reb_no_change_cn_gate
 		call	load_d1_from_address
 		call	combine_channel_with_status
 		call	send_midi_local
-		goto	reb_next
+		goto	reb_no_change_next_layer
 
 reb_no_change_cn_note
 ; gate is off.  if note is on, send a note-off message.
@@ -858,7 +982,7 @@ reb_no_change_cn_note
 		addwf	FSR,f
 		movfw	BITMASK
 		andwf	INDF,w
-		bz		reb_next
+		bz		reb_no_change_next_layer
 ; clear the note flag
 		comf	BITMASK,w
 		andwf	INDF,f
@@ -867,7 +991,23 @@ reb_no_change_cn_note
 		call	combine_channel_with_status
 		call	send_midi_local
 
-reb_next
+reb_no_change_next_layer
+		pagesel	process_inbound_midi
+		call	process_inbound_midi
+		pagesel	read_logic_inputs
+; bail out if relevant sysex message comes in.
+		btfsc	STATE_FLAGS,2
+		return
+; increment layer
+		incf	CONFIG_LAYER,f
+; increment layer bitmask
+		bcf	STATUS,C
+		rlf	TEMP7,f
+; decrement loop counter
+		decfsz	COUNTER_L,f
+		goto	reb_no_change_layer_loop
+
+reb_next_encoder
 		bcf		STATUS,C
 		rlf		BITMASK,f
 		bcf		STATUS,C

@@ -39,11 +39,11 @@ xisr_normal	code	0x0E40
 ;xisr_normal	code
 isr_normal
 
-		btfsc	PIR1,5
-		goto	handle_rx
-
 		btfsc	INTCON,2
 		goto	handle_timer_0
+
+		btfsc	PIR1,5
+		goto	handle_rx
 
 		btfsc	PIR1,0
 		goto	handle_timer_1
@@ -84,11 +84,57 @@ isr_finish
 ; =================================
 
 handle_timer_0
-		bcf		INTCON,5
-		bcf		INTCON,2
-; turn off the activity LED
-;		bsf		PORTA,6
+		bcf	INTCON,T0IF
+
+t0_refresh_leds
+; any led select outputs to refresh?
+;		bsf	STATUS,RP0
+;		movfw	LED_SELECT_FLAGS
+;		bcf	STATUS,RP0
+;		btfsc	STATUS,Z
+;		goto	isr_finish
+
+		btfss	STATE_FLAGS_2,7
 		goto	isr_finish
+
+t0_refresh_leds_loop
+		bcf	STATUS,C
+		rlf	LED_REFRESH_BIT,f
+		incf	LED_REFRESH_NUM,f
+		btfss	LED_REFRESH_NUM,3
+		goto	t0_refresh_leds_loop_check
+		clrf	LED_REFRESH_NUM
+		movlw	B'00000001'
+		movwf	LED_REFRESH_BIT
+t0_refresh_leds_loop_check
+		bsf	STATUS,RP0
+		movfw	LED_SELECT_FLAGS
+		bcf	STATUS,RP0
+		andwf	LED_REFRESH_BIT,w
+		bz	t0_refresh_leds_loop
+
+t0_refresh_leds_set_up_data
+; set up the data
+		movfw	LED_REFRESH_NUM
+		addlw	LED_DATA_0
+		movwf	FSR
+		bcf	STATUS,IRP
+; turn off all selects for a moment
+		bsf	STATUS,RP0
+		movlw	B'11111111'
+		movwf	TRISB
+		bcf	STATUS,RP0
+; write the data, account for common anode/cathode
+		movfw	INDF
+		movwf	PORTD
+; activate appropriate select
+		comf	LED_REFRESH_BIT,w
+		bsf	STATUS,RP0
+		movwf	TRISB
+		bcf	STATUS,RP0
+
+		goto	isr_finish
+
 
 ; =================================
 ;
@@ -158,7 +204,7 @@ handle_t2_finish
 
 handle_rx
 ; Clear the Rx interrupt flag
-		bcf	PIR1,5
+;		bcf	PIR1,5
 ; Discard if the buffer is full
 		movlw	RX_BUFFER_SIZE
 		subwf	RX_BUFFER_GAUGE,w

@@ -22,7 +22,7 @@
 		EXTERN	read_pin_config
 		GLOBAL	main_init
 
-go_init		code	0x1600
+go_init		code	0x1580
 
 main_init
 
@@ -38,35 +38,21 @@ main_init
 
 ; ===================================
 ;
-; Configure the clock
-;
-; ===================================
-
-; Configure the internal clock
-;		banksel	OSCCON
-;		movlw	B'01110000'
-;		movwf	OSCCON
-
-; ===================================
-;
 ; Configure the timers
 ;
 ; ===================================
 
 ; Configure Timer0 and turn on PORTB pull-ups
-;		banksel	OPTION_REG
 		bsf		STATUS,RP0
-		movlw	B'00000111'
+		movlw	B'00000010'
 		movwf	OPTION_REG
 
 ; Configure Timer 1
-;		banksel	T1CON
 		bcf		STATUS,RP0
 		movlw	B'00000101'
 		movwf	T1CON
 
 ; Configure Timer 2
-;		banksel	T2CON
 		movlw	B'01111011'
 		movwf	T2CON
 
@@ -76,11 +62,8 @@ main_init
 ;
 ; ===================================
 
-;		banksel	PORTA
 ; put in initial states for output pins
 ; tri-states are already set to hi-z upon reset
-;		movlw	B'00001000'
-;		movwf	PORTA
 		clrf	PORTA
 		movlw	B'00000000'
 		movwf	PORTB
@@ -92,13 +75,11 @@ main_init
 		movwf	PORTE
 
 ; Configure port A
-;		banksel	TRISA
 		bsf		STATUS,RP0
 		movlw	B'00101111'
 		movwf	TRISA
 
 ; Configure port B
-;		banksel	TRISB
 		movlw	B'11111111'
 		movwf	TRISB
 
@@ -107,7 +88,6 @@ main_init
 		movwf	TRISC
 
 ; Configure Port D
-;		banksel TRISD
 		movlw	B'11111111'
 		movwf	TRISD
 
@@ -122,7 +102,6 @@ main_init
 ;
 ; =================================
 
-;		banksel PORTA
 		bcf		STATUS,RP0
 		clrf	CONFIG_LAYER
 
@@ -182,24 +161,16 @@ iip_a_loop_next
 ;
 ; ===================================
 
-;		banksel	ADCON1
 		bsf		STATUS,RP0
 		movlw	B'10000000'
 		movwf	ADCON1
-; ADCON0 is written just before A-D conversion
-;		banksel	ADCON0
-;		movlw	B'10000000'
-;		movwf	ADCON0
-
 ; check reference voltage setting
 		movlw	PROM_VREF
 		banksel	EEADR
 		movwf	EEADR
-;		banksel	EECON1
 		bsf		STATUS,RP0
 		bcf		EECON1,EEPGD
 		bsf		EECON1,RD
-;		banksel	EEDAT
 		bcf		STATUS,RP0
 		movfw	EEDAT
 		bz		vref_internal
@@ -212,7 +183,6 @@ vref_external
 		bsf		STATE_FLAGS,5
 vref_internal
 ; do nothing
-;		banksel	PORTA
 
 ; ===================================
 ;
@@ -223,14 +193,10 @@ vref_internal
 		movlw	PROM_REMAP_FLAGS
 		banksel	EEADR
 		movwf	EEADR
-;		banksel	EECON1
 		bsf		STATUS,RP0
-;		bcf		EECON1,EEPGD
 		bsf		EECON1,RD
-;		banksel	EEDAT
 		bcf		STATUS,RP0
 		movfw	EEDAT
-;		banksel	PORTA
 		bcf		STATUS,RP1
 		andlw	B'00000111'
 		movwf	TEMP
@@ -245,17 +211,12 @@ vref_internal
 ; ===================================
 
 		movlw	PROM_TRANSPOSE_REG
-;		banksel	EEADR
 		bsf		STATUS,RP1
 		movwf	EEADR
-;		banksel	EECON1
 		bsf		STATUS,RP0
-;		bcf		EECON1,EEPGD
 		bsf		EECON1,RD
-;		banksel	EEDAT
 		bcf		STATUS,RP0
 		movfw	EEDAT
-;		banksel	PORTA
 		bcf		STATUS,RP1
 		movwf	TEMP
 		btfsc	TEMP,6
@@ -275,7 +236,7 @@ init_transpose_skip
 ; init the logic input,	analog input values
 		movlw	D'17'
 		movwf	COUNTER_L
-		bcf		STATUS,IRP
+		bcf	STATUS,IRP
 		movlw	DIGITAL_0
 		movwf	FSR
 		movlw	0xFF
@@ -287,8 +248,8 @@ init_loop_a
 ; init the matrix key values
 		movlw	D'24'
 		movwf	COUNTER_L
-		bcf		STATUS,IRP
-		movlw	KEYS_0
+		bsf	STATUS,IRP
+		movlw	INCOMING_SYSEX_C
 		movwf	FSR
 		movlw	0xFF
 init_loop_a2
@@ -297,116 +258,33 @@ init_loop_a2
 		decfsz	COUNTER_L,f
 		goto	init_loop_a2
 
-
-; matrix note velocity
-		movlw	PROM_MATRIX_VELOCITY
-;		banksel	EEADR
-		bsf		STATUS,RP1
-		movwf	EEADR
-;		banksel	EECON1
-		bsf		STATUS,RP0
-		bcf		EECON1,EEPGD
-		bsf		EECON1,RD
-;		banksel	EEDAT
-		bcf		STATUS,RP0
-		movfw	EEDAT
-		banksel	MATRIX_VELOCITY
-		movwf	MATRIX_VELOCITY
-;		banksel	PORTA
-; cc on/off values
-		movlw	PROM_CC_ON
-		banksel	EEADR
-		movwf	EEADR
-;		banksel	EECON1
-		bsf		STATUS,RP0
-		bsf		EECON1,RD
-;		banksel	EEDAT
-		bcf		STATUS,RP0
-		movfw	EEDAT
-;		banksel	CC_ON_VALUE
-		movwf	CC_ON_VALUE
-;		banksel	EEADR
-		incf	EEADR,f
-;		banksel	EECON1
-		bsf		STATUS,RP0
-		bsf		EECON1,RD
-;		banksel	EEDAT
-		bcf		STATUS,RP0
-		movfw	EEDAT
-;		banksel	CC_OFF_VALUE
-		movwf	CC_OFF_VALUE
-;		banksel	PORTA
-		bcf		STATUS,RP1
-
-; encoder value init
+; data register value init
+; use EEPROM settings to init regs at user address 03h - 1Dh
 		clrf	OUTPUT_COUNTER
-;		clrf	CONFIG_LAYER
-		bcf		STATE_FLAGS,6
+		bcf	STATE_FLAGS,6
 
-		movlw	D'12'
+		movlw	D'25'
 		movwf	COUNTER_L
-		movlw	ENCODER_0
+		bcf	STATUS,IRP
+		movlw	MULTI_0
 		movwf	FSR
-		movlw	PROM_ENCODER_INIT
+		movlw	PROM_REGISTER_INIT
 		movwf	TEMP
 init_loop_b
-;		banksel	EEADR
 		bsf		STATUS,RP1
 		movfw	TEMP
 		movwf	EEADR
-;		banksel	EECON1
 		bsf		STATUS,RP0
 		bcf		EECON1,EEPGD
 		bsf		EECON1,RD
-;		banksel	EEDAT
 		bcf		STATUS,RP0
+; high bit is used for wrap flag, must be cleared here
+		bcf		EEDAT,7
 		movfw	EEDAT
 		movwf	INDF
-;		banksel	PORTA
-		bcf		STATUS,RP1
-
-; if necessary, also move init value to MATRIX_VELOCITY, CC_ON_VALUE, or CC_OFF_VALUE
-		pagesel	read_pin_config
-		call	read_pin_config
-		pagesel	main_init
-
-init_loop_b_check_mv
-		movlw	0x1A
-		subwf	CONFIG_MODE,w
-		bnz		init_loop_b_check_cc_on
-		movfw	INDF
-;		banksel	MATRIX_VELOCITY
-		bsf		STATUS,RP0
-		movwf	MATRIX_VELOCITY
-;		banksel	PORTA
-		bcf		STATUS,RP0
-		goto	init_loop_b_next
-
-init_loop_b_check_cc_on
-		movlw	0x1B
-		subwf	CONFIG_MODE,w
-		bnz		init_loop_b_check_cc_off
-		movfw	INDF
-;		banksel	CC_ON_VALUE
-		bsf		STATUS,RP1
-		movwf	CC_ON_VALUE
-;		banksel	PORTA
-		bcf		STATUS,RP1
-		goto	init_loop_b_next
-
-init_loop_b_check_cc_off
-		movlw	0x1C
-		subwf	CONFIG_MODE,w
-		bnz		init_loop_b_next
-		movfw	INDF
-;		banksel	CC_OFF_VALUE
-		bsf		STATUS,RP1
-		movwf	CC_OFF_VALUE
-;		banksel	PORTA
 		bcf		STATUS,RP1
 
 init_loop_b_next
-;		banksel	OUTPUT_COUNTER
 		incf	OUTPUT_COUNTER,f
 		incf	OUTPUT_COUNTER,f
 		incf	FSR,f
@@ -416,21 +294,17 @@ init_loop_b_next
 
 ; analog threshold init
 		movlw	PROM_ANALOG_THRESHOLD
-;		banksel	EEADR
 		bsf		STATUS,RP1
 		movwf	EEADR
-;		banksel	EECON1
 		bsf		STATUS,RP0
 		bcf		EECON1,EEPGD
 		bsf		EECON1,RD
-;		banksel	EEDAT
 		bcf		STATUS,RP0
 		movfw	EEDAT
 		banksel	ANALOG_THRESHOLD
 		movwf	ANALOG_THRESHOLD
 
 ; matrix toggle values
-;		banksel	PORTA
 		bcf		STATUS,RP0
 		movlw	D'24'
 		movwf	COUNTER_L
@@ -444,6 +318,110 @@ init_loop_c
 		decfsz	COUNTER_L,f
 		goto	init_loop_c
 
+; matrix select polarity
+		clrf	OUTPUT_COUNTER
+; CT 0-7
+		movlw	D'8'
+		movwf	COUNTER_L
+		movlw	B'00000001'
+		movwf	BITMASK
+		movlw	PORTD
+		movwf	FSR
+		bcf		STATUS,IRP
+init_loop_d
+		call	init_pin_matrix_select
+		incf	OUTPUT_COUNTER,f
+		bcf		STATUS,C
+		rlf		BITMASK,f
+		decfsz	COUNTER_L,f
+		goto	init_loop_d
+; CT 8-15
+		movlw	D'8'
+		movwf	COUNTER_L
+		movlw	B'00000001'
+		movwf	BITMASK
+		movlw	PORTB
+		movwf	FSR
+		bcf		STATUS,IRP
+init_loop_e
+		call	init_pin_matrix_select
+		incf	OUTPUT_COUNTER,f
+		bcf		STATUS,C
+		rlf		BITMASK,f
+		decfsz	COUNTER_L,f
+		goto	init_loop_e
+; CT 16-19
+		movlw	D'4'
+		movwf	COUNTER_L
+		movlw	B'00000001'
+		movwf	BITMASK
+		movlw	PORTA
+		movwf	FSR
+		bcf		STATUS,IRP
+init_loop_f
+		call	init_pin_matrix_select
+		incf	OUTPUT_COUNTER,f
+		bcf		STATUS,C
+		rlf		BITMASK,f
+		decfsz	COUNTER_L,f
+		goto	init_loop_f
+; CT 20
+		rlf		BITMASK,f
+		call	init_pin_matrix_select
+; CT 21
+		incf	OUTPUT_COUNTER,f
+		movlw	B'00000001'
+		movwf	BITMASK
+		movlw	PORTE
+		movwf	FSR
+		call	init_pin_matrix_select
+; CT 22
+		incf	OUTPUT_COUNTER,f
+		bcf		STATUS,C
+		rlf		BITMASK,f
+		call	init_pin_matrix_select
+; CT 23
+		incf	OUTPUT_COUNTER,f
+		bcf		STATUS,C
+		rlf		BITMASK,f
+		call	init_pin_matrix_select
+
+
+; message throttle
+		movlw	PROM_MESSAGE_THROTTLE
+		bsf		STATUS,RP1
+		movwf	EEADR
+		bsf		STATUS,RP0
+		bcf		EECON1,EEPGD
+		bsf		EECON1,RD
+		bcf		STATUS,RP0
+		movfw	EEDAT
+		bcf		STATUS,RP1
+		movwf	MESSAGE_THROTTLE
+
+; CT 8-15 pull-ups
+		movlw	PROM_PULLUPS_H
+		bsf		STATUS,RP1
+		movwf	EEADR
+		bsf		STATUS,RP0
+		bcf		EECON1,EEPGD
+		bsf		EECON1,RD
+		bcf		STATUS,RP0
+		comf	EEDAT,w
+		incf	EEADR,f
+		movwf	TEMP
+		bsf		STATUS,RP0
+		bsf		EECON1,RD
+		bcf		STATUS,RP0
+		comf	EEDAT,w
+		banksel	WPUB
+		andlw	B'00001111'
+		movwf	TEMP2
+		swapf	TEMP,w
+		andlw	B'11110000'
+		iorwf	TEMP2,w
+		movwf	WPUB
+
 ; logic toggle values
 		banksel	LOGIC_TOGGLES_0
 		movlw	0xFF
@@ -452,7 +430,6 @@ init_loop_c
 		movwf	LOGIC_TOGGLES_2
 
 ; continuous note flags
-;		banksel	ANALOG_CN_GATES_0
 		bcf		STATUS,RP0
 		clrf	ANALOG_CN_GATES_0
 		clrf	ANALOG_CN_NOTES_0
@@ -466,7 +443,6 @@ init_loop_c
 		clrf	ENCODER_CN_NOTES_1
 		clrf	ENCODER_CN_GATES_2
 		clrf	ENCODER_CN_NOTES_2
-;		banksel	PORTA
 		bcf		STATUS,RP1
 
 
@@ -481,26 +457,27 @@ init_loop_c
 		clrf	INBOUND_STATUS
 		clrf	INBOUND_BYTECOUNT
 
-		clrf	SYSEX_TYPE
 		clrf	OUTBOUND_STATUS
+		clrf	SYSEX_TYPE
 
 ; =================================
 ;
 ; LED Output Init
 ;
 ; =================================
-;		banksel	LED_DATA_FLAGS
+		clrf	LED_REFRESH_NUM
+		movlw	B'00000001'
+		movwf	LED_REFRESH_BIT
 		bsf		STATUS,RP0
 		clrf	LED_SELECT_FLAGS
 ; init the active select for ct 15 (first next is then 8)
 		movlw	D'15'
-		movwf	LED_ACTIVE_SELNUM
+		movwf	LED_UPDATE_SELNUM
 		movlw	B'10000000'
-		movwf	LED_ACTIVE_SELBIT
+		movwf	LED_UPDATE_SELBIT
 ; Use config to set LED flags & TRISD
 ; output #s 0-7
 		clrf	LED_DATA_FLAGS
-;		banksel	PORTA
 		bcf		STATUS,RP0
 		clrf	OUTPUT_COUNTER
 		movlw	D'8'
@@ -515,12 +492,10 @@ init_led_loop_a
 		sublw	0x2B
 		bnz		init_led_loop_a_next
 ; set the LED flag & tri-state
-;		banksel	LED_DATA_FLAGS
 		bsf		STATUS,RP0
 		movfw	BITMASK
 		iorwf	LED_DATA_FLAGS,f
 		xorwf	TRISD,f
-;		banksel	PORTA
 		bcf		STATUS,RP0
 init_led_loop_a_next
 		bcf		STATUS,C
@@ -545,8 +520,12 @@ init_led_loop_b
 		bnz		init_led_loop_b_next
 ; deactivate the weak pull-up
 		bsf		STATUS,RP0
+;		movfw	BITMASK
+;		xorwf	WPUB,f
+		comf	BITMASK,w
+		andwf	WPUB,f
+
 		movfw	BITMASK
-		xorwf	WPUB,f
 		iorwf	LED_SELECT_FLAGS,f
 ; set output state for common anode non-inverting, or for common cathode inverting.
 		bcf		STATUS,RP0
@@ -572,6 +551,13 @@ init_led_loop_b_next
 ; tristate will activate output during runtime.
 		movfw	TEMP
 		movwf	PORTB
+
+; set the LED flag if any LED common outputs are configured.
+		bsf	STATUS,RP0
+		movfw	LED_SELECT_FLAGS
+		bcf	STATUS,RP0
+		btfss	STATUS,Z
+		bsf	STATE_FLAGS_2,7
 
 ; =========================
 ; 
@@ -611,7 +597,6 @@ led_test_b
 		decfsz	COUNTER_H,f
 		goto	led_test_a
 
-;		bsf	PORTA,6
 		movlw	B'01000000'
 		movwf	PORTA
 
@@ -632,7 +617,6 @@ led_test_b
 ; ===================================
 
 ; Set up the USART
-;		banksel	PIE1
 		bsf		STATUS,RP0
 ; Enable receive interrupt
 		bsf		PIE1,5
@@ -643,7 +627,6 @@ led_test_b
 ; Set the transmit control bits
 		movlw	B'00100110'
 		movwf	TXSTA
-;		banksel PORTA
 		bcf		STATUS,RP0
 ; Set the receive control bits
 		movlw	B'10010000'
@@ -658,32 +641,28 @@ led_test_b
 ; 
 ; =========================
 ; kick off the midi active sense timer (Timer 2)
-;		banksel	T2_COUNTER
 		bsf		STATUS,RP0
 		movlw	T2_SCALE
 		movwf	T2_COUNTER
-;		banksel	PIE1
 		bsf		PIE1,1
-;		banksel	PORTA
 		bcf		STATUS,RP0
 		bsf		T2CON,2
 ; check active sense setting
 		movlw	PROM_ACTIVE_SENSE
-;		banksel	EEADR
 		bsf		STATUS,RP1
 		movwf	EEADR
-;		banksel	EECON1
 		bsf		STATUS,RP0
 		bcf		EECON1,EEPGD
 		bsf		EECON1,RD
-;		banksel	EEDAT
 		bcf		STATUS,RP0
 		movfw	EEDAT
-;		banksel	PORTA
 		bcf		STATUS,RP1
 ; set state flag if necessary
 		btfss	STATUS,Z
 		bsf		STATE_FLAGS_2,0
+
+; start timer 0
+		bsf	INTCON,T0IE
 
 		return
 
@@ -725,6 +704,42 @@ init_input_pin_anselh
 		andwf	ANSELH,f
 		banksel	PORTA
 
+		return
+
+; =========================
+; 
+; Check config of dual-mode pins and init as necessary
+; 
+; =========================
+
+init_pin_matrix_select
+		pagesel	read_pin_config
+		call	read_pin_config
+		pagesel	main_init
+; pins are already set for high-z state, but...
+; if pin is configured as a positive-pulse matrix select line,
+;   set the state to '1' here.
+; check for a select output mode
+		movlw	0x2C
+		subwf	CONFIG_MODE,w
+		btfss	STATUS,C
+		return
+		movfw	CONFIG_MODE
+		sublw	0x3F
+		btfss	STATUS,C
+		return
+; check for positive pulse mode
+		movlw	B'00000011'
+		andwf	CONFIG_MODE,f
+		movlw	B'00000011'
+		subwf	CONFIG_MODE,w
+		btfsc	STATUS,Z
+		return
+; toggle pin bit
+		movfw	TEMP_REG
+		movwf	FSR
+		movfw	BITMASK
+		iorwf	INDF,f
 		return
 
 		end

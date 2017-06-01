@@ -49,11 +49,11 @@ inbound_sysex_finish
 
 		decf	SYSEX_TYPE,f
 		btfsc	STATUS,Z
-		goto	isf_type_2
+		goto	isf_error
 
 		decf	SYSEX_TYPE,f
 		btfsc	STATUS,Z
-		goto	isf_type_3
+		goto	isf_error
 
 		decf	SYSEX_TYPE,f
 		btfsc	STATUS,Z
@@ -87,6 +87,14 @@ inbound_sysex_finish
 		btfsc	STATUS,Z
 		goto	isf_type_B
 
+		decf	SYSEX_TYPE,f
+		btfsc	STATUS,Z
+		goto	isf_type_C
+
+		decf	SYSEX_TYPE,f
+		btfsc	STATUS,Z
+		goto	isf_type_D
+
 		goto	isf_error
 
 isf_type_0
@@ -106,14 +114,6 @@ isf_type_0
 
 		sublw	0x01
 		bz		isf_type_01
-
-		movfw	INCOMING_SYSEX_A
-		sublw	0x02
-		bz		isf_type_02
-
-		movfw	INCOMING_SYSEX_A
-		sublw	0x03
-		bz		isf_type_03
 
 		movfw	INCOMING_SYSEX_A
 		sublw	0x04
@@ -144,6 +144,14 @@ isf_type_0
 		bz		isf_type_0B
 
 		movfw	INCOMING_SYSEX_A
+		sublw	0x0C
+		bz		isf_type_0C
+
+		movfw	INCOMING_SYSEX_A
+		sublw	0x0D
+		bz		isf_type_0D
+
+		movfw	INCOMING_SYSEX_A
 		sublw	0x7D
 		bz		isf_type_07D
 
@@ -157,7 +165,7 @@ isf_type_07F
 		banksel	TEMP5
 		movlw	B'11111111'
 		movwf	TEMP5
-		movlw	B'00111111'
+		movlw	B'11111111'
 		movwf	TEMP6
 		goto	isf_type_01_check_0
 
@@ -299,56 +307,175 @@ isf_type_01_loop
 		goto	isf_type_01_check_1
 isf_type_01_skip
 
-isf_type_02_check
-		btfss	TEMP5,0
-		goto	isf_type_02_skip
-		bcf		TEMP5,0
-isf_type_02
-; dump matrix note velocity
-		movlw	0x02
-		movwf	TEMP
-		movlw	PROM_MATRIX_VELOCITY
-		banksel	EEADR
-		movwf	EEADR
-		banksel	PORTA
-		movlw	D'1'
-		movwf	COUNTER_L
-		goto	isf_dump_generic
-isf_type_02_skip
-
-
-isf_type_03_check
-		btfss	TEMP5,1
-		goto	isf_type_03_skip
-		bcf		TEMP5,1
-isf_type_03
-; dump CC on/off values
-		movlw	0x03
-		movwf	TEMP
-		movlw	PROM_CC_ON
-		banksel	EEADR
-		movwf	EEADR
-		banksel	PORTA
-		movlw	D'2'
-		movwf	COUNTER_L
-		goto	isf_dump_generic
-isf_type_03_skip
-
 isf_type_04_check
 		btfss	TEMP5,2
 		goto	isf_type_04_skip
 		bcf		TEMP5,2
 isf_type_04
-; dump rotary encoder initial values
+		banksel	PORTA
+		call	send_sysex_header
 		movlw	0x04
-		movwf	TEMP
-		movlw	PROM_ENCODER_INIT
+		movwf	OUTBOUND_BYTE
+		pagesel	send_midi_byte
+		call	send_midi_byte
+		pagesel	inbound_sysex_finish
+; dump nn ii mn mx rr for regs 03h - 25h
+; 03h - 10h first.  These are analog regs with no init/roundrobin
+		movlw	D'14'
+		movwf	COUNTER_H
+		movlw	0x03
+		movwf	OUTPUT_COUNTER
 		banksel	EEADR
+		movlw	PROM_REGISTER_MIN
 		movwf	EEADR
 		banksel	PORTA
-		movlw	D'12'
-		movwf	COUNTER_L
-		goto	isf_dump_generic
+isf_type_04_loop_a
+; nn
+		movfw	OUTPUT_COUNTER
+		movwf	OUTBOUND_BYTE
+		pagesel	send_midi_byte
+		call	send_midi_byte
+;		pagesel	inbound_sysex_finish
+; ii		
+		movlw	0x00
+		movwf	OUTBOUND_BYTE
+;		pagesel	send_midi_byte
+		call	send_midi_byte
+;		pagesel	inbound_sysex_finish
+; mn
+		banksel	EECON1
+		bcf		EECON1,EEPGD
+		bsf		EECON1,RD
+		banksel	EEDAT
+		movfw	EEDAT
+;		incf	EEADR,f
+		banksel	PORTA
+		movwf	OUTBOUND_BYTE
+		bcf	OUTBOUND_BYTE,7
+;		pagesel	send_midi_byte
+		call	send_midi_byte
+;		pagesel	inbound_sysex_finish
+		banksel	EEADR
+		movlw	NUM_MINMAX_REGS
+		addwf	EEADR,f
+; mx
+		banksel	EECON1
+		bsf		EECON1,RD
+		banksel	EEDAT
+		movfw	EEDAT
+		banksel	PORTA
+		movwf	OUTBOUND_BYTE
+		bcf	OUTBOUND_BYTE,7
+;		pagesel	send_midi_byte
+		call	send_midi_byte
+;		pagesel	inbound_sysex_finish
+		banksel	EEADR
+		movlw	NUM_MINMAX_REGS-1
+		subwf	EEADR,f
+		banksel	PORTA
+; rr
+		movlw	0x00
+		movwf	OUTBOUND_BYTE
+;		pagesel	send_midi_byte
+		call	send_midi_byte
+		pagesel	inbound_sysex_finish
+; next nn
+		incf	OUTPUT_COUNTER,f
+		decfsz	COUNTER_H,f
+		goto	isf_type_04_loop_a
+
+; 11h - 25h next.  These are multipurpose and flag regs.  All params apply.
+		movlw	D'25'
+		movwf	COUNTER_H
+		movlw	PROM_REGISTER_INIT
+		movwf	TEMP
+		movlw	PROM_REGISTER_MIN+D'14'
+		movwf	TEMP2
+isf_type_04_loop_b
+; nn
+		movfw	OUTPUT_COUNTER
+		movwf	OUTBOUND_BYTE
+		pagesel	send_midi_byte
+		call	send_midi_byte
+;		pagesel	inbound_sysex_finish
+; ii
+		banksel	EEADR
+		movfw	TEMP
+		movwf	EEADR
+		banksel	EECON1
+		bsf		EECON1,RD
+		banksel	EEDAT
+		movfw	EEDAT
+		banksel	PORTA
+		andlw	B'01111111'
+		movwf	OUTBOUND_BYTE
+;		pagesel	send_midi_byte
+		call	send_midi_byte
+;		pagesel	inbound_sysex_finish
+; mn
+		banksel	EEADR
+		movfw	TEMP2
+		movwf	EEADR
+		banksel	EECON1
+		bsf		EECON1,RD
+		banksel	EEDAT
+
+		movlw	NUM_MINMAX_REGS
+		addwf	EEADR,f
+
+		movfw	EEDAT
+		banksel	PORTA
+		movwf	OUTBOUND_BYTE
+		bcf	OUTBOUND_BYTE,7
+;		pagesel	send_midi_byte
+		call	send_midi_byte
+;		pagesel	inbound_sysex_finish
+; mx
+;		banksel	EEADR
+;		movfw	TEMP3
+;		movwf	EEADR
+		banksel	EECON1
+		bsf		EECON1,RD
+		banksel	EEDAT
+		movfw	EEDAT
+		banksel	PORTA
+		movwf	OUTBOUND_BYTE
+		bcf	OUTBOUND_BYTE,7
+;		pagesel	send_midi_byte
+		call	send_midi_byte
+;		pagesel	inbound_sysex_finish
+; rr
+		banksel	EEADR
+		movfw	TEMP
+		movwf	EEADR
+		banksel	EECON1
+		bsf		EECON1,RD
+		banksel	EEDAT
+		movfw	EEDAT
+		banksel	PORTA
+		movwf	TEMP4
+;		pagesel	send_midi_byte
+		clrf	OUTBOUND_BYTE
+		btfsc	TEMP4,7
+		bsf		OUTBOUND_BYTE,0
+		call	send_midi_byte
+		pagesel	inbound_sysex_finish
+; next nn
+		incf	OUTPUT_COUNTER,f
+		incf	TEMP,f
+		incf	TEMP2,f
+;		incf	TEMP3,f
+		decfsz	COUNTER_H,f
+		goto	isf_type_04_loop_b
+; footer
+isf_type_04_send_footer
+		movlw	0xF7
+		movwf	OUTBOUND_BYTE
+		pagesel	send_midi_byte
+		call	send_midi_byte
+		pagesel	inbound_sysex_finish
+
+		goto	isf_type_05_check
 isf_type_04_skip
 
 isf_type_05_check
@@ -480,6 +607,40 @@ isf_type_0B
 		goto	isf_dump_generic
 isf_type_0B_skip
 
+isf_type_0C_check
+		btfss	TEMP6,6
+		goto	isf_type_0C_skip
+		bcf		TEMP6,6
+isf_type_0C
+; dump remap flags setting
+		movlw	0x0C
+		movwf	TEMP
+		movlw	PROM_PULLUPS_H
+		banksel	EEADR
+		movwf	EEADR
+		banksel	PORTA
+		movlw	D'2'
+		movwf	COUNTER_L
+		goto	isf_dump_generic
+isf_type_0C_skip
+
+isf_type_0D_check
+		btfss	TEMP6,7
+		goto	isf_type_0D_skip
+		bcf		TEMP6,7
+isf_type_0D
+; dump remap flags setting
+		movlw	0x0D
+		movwf	TEMP
+		movlw	PROM_MESSAGE_THROTTLE
+		banksel	EEADR
+		movwf	EEADR
+		banksel	PORTA
+		movlw	D'1'
+		movwf	COUNTER_L
+		goto	isf_dump_generic
+isf_type_0D_skip
+
 isf_type_07D_check
 		btfss	TEMP5,7
 		goto	isf_type_07D_skip
@@ -529,34 +690,7 @@ isf_dump_generic_loop
 		call	send_midi_byte
 		pagesel	inbound_sysex_finish
 ;		goto	isf_flush
-		goto	isf_type_03_check
-
-isf_type_2
-		banksel	EEADR
-		movlw	PROM_MATRIX_VELOCITY
-		movwf	EEADR
-		banksel	PORTA
-		movlw	0x01
-		movwf	COUNTER_L
-		goto	isf_generic
-
-isf_type_3
-		banksel	EEADR
-		movlw	PROM_CC_ON
-		movwf	EEADR
-		banksel	PORTA
-		movlw	0x02
-		movwf	COUNTER_L
-		goto	isf_generic
-
-isf_type_4
-		banksel	EEADR
-		movlw	PROM_ENCODER_INIT
-		movwf	EEADR
-		banksel	PORTA
-		movlw	D'12'
-		movwf	COUNTER_L
-		goto	isf_generic
+		goto	isf_type_05_check
 
 isf_type_5
 		banksel	EEADR
@@ -645,6 +779,24 @@ isf_type_A
 isf_type_B
 		banksel	EEADR
 		movlw	PROM_TRANSPOSE_REG
+		movwf	EEADR
+		banksel	PORTA
+		movlw	0x01
+		movwf	COUNTER_L
+		goto	isf_generic
+
+isf_type_C
+		banksel	EEADR
+		movlw	PROM_PULLUPS_H
+		movwf	EEADR
+		banksel	PORTA
+		movlw	0x02
+		movwf	COUNTER_L
+		goto	isf_generic
+
+isf_type_D
+		banksel	EEADR
+		movlw	PROM_MESSAGE_THROTTLE
 		movwf	EEADR
 		banksel	PORTA
 		movlw	0x01
@@ -878,6 +1030,137 @@ isf_type_1_write
 		call	write_program_eeprom
 
 ; reboot!
+		goto	isf_reboot
+
+isf_type_4
+; register setup.
+; check each "chunk" in sysex buffer.
+; chunk format:  ii mn mx rr
+; If non-7F 7F 7F 7F (from wipe), write to data EEPROM.
+; COUNTER_H goes from 03h thru 25h
+		movlw	0x03
+		movwf	COUNTER_H
+isf_type_4_loop
+; retreive ii
+		movlw	0x0F
+		andwf	COUNTER_H,w
+		movwf	TEMP
+		bsf	STATUS,IRP
+		movlw	INCOMING_SYSEX_C
+		btfsc	COUNTER_H,5
+		goto	isf_type_4_check_ii
+		movlw	INCOMING_SYSEX_B
+		btfsc	COUNTER_H,4
+		goto	isf_type_4_check_ii
+		bcf	STATUS,IRP
+		movlw	INCOMING_SYSEX_A
+isf_type_4_check_ii
+; if bit 7 of ii is set, this register was not specified.  so skip.
+		addwf	TEMP,w
+		addwf	TEMP,w
+		addwf	TEMP,w
+		addwf	TEMP,w
+		movwf	FSR
+		btfsc	INDF,7
+		goto	isf_type_4_next_reg
+isf_type_4_check_reg_num
+; write ii/rr only for registers >= 11h
+		movfw	COUNTER_H
+		sublw	0x10
+		bnc	isf_type_4_write_ii_rr
+; point to mn
+		incf	FSR,f
+		goto	isf_type_4_write_mn
+isf_type_4_write_ii_rr
+; store ii in TEMP2.  Set bit 7 based on rr.
+		movfw	INDF
+		movwf	TEMP2
+		movlw	0x03
+		addwf	FSR,f
+		btfsc	INDF,0
+		bsf	TEMP2,7
+; write ii/rr to EEPROM
+		movlw	0x11
+		subwf	COUNTER_H,w
+		addlw	PROM_REGISTER_INIT
+		banksel	EEADR
+		movwf	EEADR
+		movfw	TEMP2
+		movwf	EEDAT
+		banksel	EECON1
+		bcf	EECON1,EEPGD
+		bsf	EECON1,WREN
+		movlw	0x55
+		movwf	EECON2
+		movlw	0xAA
+		movwf	EECON2
+		bsf	EECON1,WR
+; wait for write to  complete
+		banksel	PIR2
+		btfss	PIR2,EEIF
+		goto	$-1
+		bcf	PIR2,EEIF
+; point to mn
+		movlw	0x02
+		subwf	FSR,f
+isf_type_4_write_mn
+; store mn in TEMP2.
+		movfw	INDF
+		movwf	TEMP2
+; write mn to EEPROM
+		movlw	0x03
+		subwf	COUNTER_H,w
+		addlw	PROM_REGISTER_MIN
+		banksel	EEADR
+		movwf	EEADR
+		movfw	TEMP2
+		movwf	EEDAT
+		banksel	EECON1
+		bcf	EECON1,EEPGD
+		bsf	EECON1,WREN
+		movlw	0x55
+		movwf	EECON2
+		movlw	0xAA
+		movwf	EECON2
+		bsf	EECON1,WR
+; wait for write to  complete
+		banksel	PIR2
+		btfss	PIR2,EEIF
+		goto	$-1
+		bcf	PIR2,EEIF
+; point to mx
+		incf	FSR,f
+isf_type_4_write_mx
+; store mx in TEMP2.
+		movfw	INDF
+		movwf	TEMP2
+; write mx to EEPROM
+		movlw	0x03
+		subwf	COUNTER_H,w
+		addlw	PROM_REGISTER_MAX
+		banksel	EEADR
+		movwf	EEADR
+		movfw	TEMP2
+		movwf	EEDAT
+		banksel	EECON1
+		bcf	EECON1,EEPGD
+		bsf	EECON1,WREN
+		movlw	0x55
+		movwf	EECON2
+		movlw	0xAA
+		movwf	EECON2
+		bsf	EECON1,WR
+; wait for write to  complete
+		banksel	PIR2
+		btfss	PIR2,EEIF
+		goto	$-1
+		bcf	PIR2,EEIF
+isf_type_4_next_reg
+		incf	COUNTER_H,f
+		movfw	COUNTER_H
+		sublw	MAX_REGISTER
+		bc	isf_type_4_loop
+		
 		goto	isf_reboot
 
 

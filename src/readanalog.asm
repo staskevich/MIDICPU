@@ -24,11 +24,17 @@
 		EXTERN	inbound_sysex_finish
 		EXTERN	process_inbound_midi
 		EXTERN	read_pin_config
+		EXTERN	read_reg_config
 		EXTERN	combine_channel_with_status
 		EXTERN	load_d0_from_address
 		EXTERN	load_d1_from_address
-		EXTERN	send_midi_byte
 		EXTERN	send_midi_local
+		EXTERN	go_reg_increment
+		EXTERN	go_reg_decrement
+		EXTERN	go_reg_sum
+		EXTERN	go_reg_copy
+		EXTERN	go_reg_store_value
+		EXTERN	go_reg_bit_op
 
 ; ==================================================================
 ;
@@ -39,8 +45,8 @@
 		GLOBAL	read_analog_inputs
 
 
-read_analog		code	0x800
-;read_analog		code
+; read_analog		code	0x800
+read_analog		code
 
 
 ; =================================
@@ -222,12 +228,13 @@ read_analog_inputs
 
 
 read_analog_pin
-; get the config
+; check layer 0 config.  If not analog mode, exit.
+		clrf	CONFIG_LAYER
 		call	read_pin_config
 		movlw	B'11110000'
 		andwf	CONFIG_MODE,w
-		bnz		read_analog_pin_next
-
+		btfss	STATUS,Z
+		return
 ; convert the analog voltage
 ; select the current pin & turn on the ADC
 		bcf		STATUS,0
@@ -258,6 +265,8 @@ read_analog_pin
 rap_first_sample
 ; if this is the first sample, go with this value
 ; current sample becomes TEMP3:TEMP4 and rolling average
+		movlw	0xFF
+		movwf	TEMP5
 		movlw	INCOMING_SYSEX_A
 		addwf	ANALOG_INPUT,w
 		addwf	ANALOG_INPUT,w
@@ -277,7 +286,7 @@ rap_first_sample
 		rrf		TEMP2,f
 		bcf		STATUS,C
 		rrf		TEMP2,f
-		goto	analog_pin_trigger_event
+		goto	rap_round_down
 rap_rolling_average
 ; grab the previous event trigger value
 		movlw	INCOMING_SYSEX_A+D'29'
@@ -527,6 +536,27 @@ rap_round_down
 ; TEMP2: new 7bit value.  TEMP: nothing
 ; TEMP3 & TEMP4: new average
 ; TEMP5 : TEMP6: previous trigger value
+; apply configurable min/max.
+		movfw	ANALOG_INPUT
+		addlw	0x03
+		movwf	REG_ADDRESS
+		call	read_reg_config
+		movfw	REG_MIN
+		subwf	TEMP2,w
+		btfss	STATUS,C
+		goto	rap_enforce_minimum
+		movfw	TEMP2
+		subwf	REG_MAX,w
+		btfsc	STATUS,C
+		goto	rap_compare_previous
+rap_enforce_maximum
+		movfw	REG_MAX
+		movwf	TEMP2
+		goto	rap_compare_previous
+rap_enforce_minimum
+		movfw	REG_MIN
+		movwf	TEMP2
+rap_compare_previous
 ; compare to previous 7-bit value.  If unchanged, nothing further required.
 		movlw	ANALOG_0
 		addwf	ANALOG_INPUT,w
@@ -534,6 +564,10 @@ rap_round_down
 		movfw	INDF
 ; save old value in LOCAL_D0 for use by continuous note modes
 		movwf	LOCAL_D0
+; global refresh happening?  trigger an event.
+		btfsc	STATE_FLAGS_2,6
+		goto	analog_pin_trigger_event
+; check for change to 7-bit value.
 		subwf	TEMP2,w
 		bz		read_analog_pin_unchanged
 ; check if an event should be triggered based on the change between the
@@ -603,15 +637,32 @@ analog_pin_trigger_event
 		movlw	ANALOG_0
 		addwf	ANALOG_INPUT,w
 		movwf	FSR
+; put previous 7-bit value in TEMP5
+		movfw	INDF
+		movwf	TEMP5
 ; store new value
 		movfw	TEMP2
 		movwf	INDF
-
+; check each of 4 config layers.
+; set up the layer flag bitmask
+		movlw	B'00000001'
+		movwf	TEMP7
+rap_layer_loop
+; current layer active?
+		movfw	LAYER_FLAGS_SNAPSHOT
+		andwf	TEMP7,0
+		bz	rap_next_layer
+; get the pin config for this layer.
+		call	read_pin_config
+; skip if not an analog mode.
+		movlw	B'11110000'
+		andwf	CONFIG_MODE,w
+		bnz	rap_next_layer
 ; check mode, send message if necessary
 rap_check_continuous_note
 		movlw	B'11111110'
 		andwf	CONFIG_MODE,w
-		bnz		rap_check_aftertouch
+		bnz	rap_skip_continuous_note
 
 ; truth table for continuous note ons / offs.
 ; considers change to analog value, gate flags, and note flags.
@@ -635,9 +686,11 @@ rap_check_cn_note_flag
 ; clear the note flag
 		comf	BITMASK,w
 		andwf	INDF,f
-; (note number loaded to LOCAL_D0 above)
+; send the note off message
 		movlw	0x90
 		movwf	LOCAL_STATUS
+		movfw	TEMP5
+		movwf	LOCAL_D0
 		clrf	LOCAL_D1
 		call	combine_channel_with_status
 		call	send_midi_local
@@ -647,7 +700,7 @@ rap_check_cn_gate_flag
 		movwf	FSR
 		movfw	BITMASK
 		andwf	INDF,w
-		bz		read_analog_pin_next
+		bz	rap_next_layer
 ; set the note flag
 		movlw	D'6'
 		addwf	FSR,f
@@ -663,11 +716,11 @@ rap_check_cn_gate_flag
 		btfsc	CONFIG_MODE,0
 		call	load_d1_from_address
 		goto	rap_send_message
-
+rap_skip_continuous_note
 rap_check_aftertouch
 		movlw	B'11111100'
 		andwf	CONFIG_MODE,w
-		bnz		rap_check_controller
+		bnz	rap_skip_aftertouch
 
 		movlw	0xA0
 		movwf	LOCAL_STATUS
@@ -681,11 +734,11 @@ rap_check_aftertouch
 		goto	rap_send_message
 		call	load_d0_from_address
 		goto	rap_send_message
-
+rap_skip_aftertouch
 rap_check_controller
 		movlw	B'11111010'
 		andwf	CONFIG_MODE,w
-		bnz		rap_check_program_change
+		bnz	rap_skip_controller
 
 		movlw	0xB0
 		movwf	LOCAL_STATUS
@@ -699,78 +752,110 @@ rap_check_controller
 		goto	rap_send_message
 		call	load_d0_from_address
 		goto	rap_send_message
-
+rap_skip_controller
 rap_check_program_change
 		movlw	B'11111001'
 		andwf	CONFIG_MODE,w
-		bnz		rap_check_channel_pressure
+		bnz	rap_skip_program_change
 
 		movlw	0xC0
 		movwf	LOCAL_STATUS
 		call	load_d0_from_address
 		goto	rap_send_message
-
+rap_skip_program_change
 rap_check_channel_pressure
 		movlw	B'11111000'
 		andwf	CONFIG_MODE,w
-		bnz		rap_check_pitch_wheel
+		bnz	rap_skip_channel_pressure
 
 		movlw	0xD0
 		movwf	LOCAL_STATUS
 		call	load_d0_from_address
 		goto	rap_send_message
-
+rap_skip_channel_pressure
 rap_check_pitch_wheel
 		movlw	B'11110111'
 		andwf	CONFIG_MODE,w
-		bnz		rap_check_matrix_velocity
+		bnz	rap_skip_pitch_wheel
 
 		movlw	0xE0
 		movwf	LOCAL_STATUS
 		call	load_d1_from_address
 		clrf	LOCAL_D0
 		goto	rap_send_message
-
-rap_check_matrix_velocity
-		movlw	0x0A
-		subwf	CONFIG_MODE,w
-		bnz		rap_check_cc_on_value
-
-		movfw	TEMP2
-		banksel	MATRIX_VELOCITY
-		movwf	MATRIX_VELOCITY
-		banksel	PORTA
-		goto	read_analog_pin_next
-
-rap_check_cc_on_value
-		movlw	0x0B
-		subwf	CONFIG_MODE,w
-		bnz		rap_check_cc_off_value
-
-		movfw	TEMP2
-		banksel	CC_ON_VALUE
-		movwf	CC_ON_VALUE
-		banksel	PORTA
-		goto	read_analog_pin_next
-
-rap_check_cc_off_value
+rap_skip_pitch_wheel
+;rap_check_increment
+;		movlw	0x0A
+;		subwf	CONFIG_MODE,w
+;		bnz	rap_skip_increment
+;		call	go_reg_increment
+;		goto	rap_next_layer
+;rap_skip_increment
+;rap_check_sum
+;		movlw	0x0B
+;		subwf	CONFIG_MODE,w
+;		bnz	rap_skip_sum
+;		call	go_reg_sum
+;		goto	rap_next_layer
+;rap_skip_sum
+rap_check_copy
 		movlw	0x0C
 		subwf	CONFIG_MODE,w
-; mode not matched
-		bnz		read_analog_pin_next
+		bnz	rap_skip_copy
+		call	go_reg_copy
+		goto	rap_next_layer
+rap_skip_copy
+rap_check_store
+		movlw	0x0D
+		subwf	CONFIG_MODE,w
+		bnz	rap_skip_store
+		call	go_reg_store_value
+		goto	rap_next_layer
+rap_skip_store
+rap_check_bitop
+		movlw	0x0E
+		subwf	CONFIG_MODE,w
+		bnz	rap_next_layer
+		call	go_reg_bit_op
+		goto	rap_next_layer
 
-		movfw	TEMP2
-		banksel	CC_OFF_VALUE
-		movwf	CC_OFF_VALUE
-		banksel	PORTA
-		goto	read_analog_pin_next
+; send message
+rap_send_message
+		call	combine_channel_with_status
+		call	send_midi_local
+rap_next_layer
+		pagesel	process_inbound_midi
+		call	process_inbound_midi
+		pagesel	read_analog_inputs
+; next layer
+		bcf	STATUS,C
+		rlf	TEMP7,f
+		incf	CONFIG_LAYER,f
+		btfss	CONFIG_LAYER,2
+		goto	rap_layer_loop
+		return
 
 read_analog_pin_unchanged
+; check each of 4 config layers.
+; set up the layer flag bitmask
+		movlw	B'00000001'
+		movwf	TEMP7
+rapu_layer_loop
+; current layer active?
+		movfw	LAYER_FLAGS_SNAPSHOT
+		andwf	TEMP7,0
+		bz	rapu_next_layer
+; get the pin config for this layer.
+		call	read_pin_config
+; skip if not an analog mode.
+		movlw	B'11110000'
+		andwf	CONFIG_MODE,w
+		bnz	rapu_next_layer
 ; if current mode is continous note, there may still be stuff to do.
 ; send either a note-on or note off, neither, but not both.
 		movlw	B'11111110'
 		andwf	CONFIG_MODE,w
-		bnz		read_analog_pin_next
+		bnz	rapu_next_layer
 ; status is 0x90 for sure
 		movlw	0x90
 		movwf	LOCAL_STATUS
@@ -787,7 +872,7 @@ rap_unchanged_cn_gate
 		addwf	FSR,f
 		movfw	BITMASK
 		andwf	INDF,w
-		bnz		read_analog_pin_next
+		bnz	rapu_next_layer
 ; send note-on
 ; set the note flag
 		movfw	BITMASK
@@ -799,7 +884,7 @@ rap_unchanged_cn_gate
 ; overwrite with register value if necessary
 		btfsc	CONFIG_MODE,0
 		call	load_d1_from_address
-		goto	rap_send_message
+		goto	rapu_send_message
 
 rap_unchanged_cn_note
 ; gate is off. if note is on, send a note-off message.
@@ -807,23 +892,28 @@ rap_unchanged_cn_note
 		addwf	FSR,f
 		movfw	BITMASK
 		andwf	INDF,w
-		bz		read_analog_pin_next
+		bz	rapu_next_layer
 ; send note_off
 ; clear the note flag
 		comf	BITMASK,w
 		andwf	INDF,f
 ; LOCAL_D0 should already be loaded and ready to go.
 		clrf	LOCAL_D1
-		goto	rap_send_message
-
+		goto	rapu_send_message
 ; send message
-rap_send_message
+rapu_send_message
 		call	combine_channel_with_status
 		call	send_midi_local
-read_analog_pin_next
+rapu_next_layer
 		pagesel	process_inbound_midi
 		call	process_inbound_midi
 		pagesel	read_analog_inputs
+; next layer
+		bcf	STATUS,C
+		rlf	TEMP7,f
+		incf	CONFIG_LAYER,f
+		btfss	CONFIG_LAYER,2
+		goto	rapu_layer_loop
 		return
 
 

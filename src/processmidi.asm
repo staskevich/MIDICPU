@@ -45,6 +45,9 @@ process_midi	code	0x1800
 ;
 ; =================================
 process_inbound_midi
+; refresh leds first
+;		call	refresh_leds
+
 ; Check for an emtpy fifo
 		movfw	RX_BUFFER_GAUGE
 		btfsc	STATUS,Z
@@ -174,6 +177,10 @@ process_inbound_sysex_data
 		goto	process_inbound_sysex_header
 
 process_inbound_sysex_body
+; for type 04 messages, map the data into memory using nn and tt.
+		movlw	0x04
+		subwf	SYSEX_TYPE,w
+		bz		pisb_type_4
 ; for type 01 messages, map the data into memory using nn and tt.
 ;		btfsc	STATE_FLAGS,2
 		decfsz	SYSEX_TYPE,w
@@ -210,12 +217,6 @@ pisb_type_1_store_d1
 ; chunk is complete, roll the bytecount back to 1 (0 is for yy only)
 		movlw	0x01
 		movwf	INBOUND_BYTECOUNT
-
-;		banksel	INCOMING_SYSEX_A
-;		movlw	0x77
-;		movwf	0xB0
-;		banksel	PORTA
-
 		goto	process_inbound_midi_next
 
 pisb_type_1_store_yy
@@ -271,6 +272,55 @@ pisb_type_1_store_d0
 		movfw	RX_MIDI_BYTE
 		banksel	SYSEX_D0
 		movwf	SYSEX_D0
+		banksel	PORTA
+		incf	INBOUND_BYTECOUNT,f
+		goto	process_inbound_midi_next
+
+pisb_type_4
+; reuse some type_1 code
+		movfw	INBOUND_BYTECOUNT
+		bz		pisb_type_4_store_nn
+		movfw	INBOUND_BYTECOUNT
+		sublw	0x01
+		bz		pisb_type_1_store_mm
+		movfw	INBOUND_BYTECOUNT
+		sublw	0x02
+		bz		pisb_type_1_store_ch
+		movfw	INBOUND_BYTECOUNT
+		sublw	0x03
+		bz		pisb_type_1_store_d0
+pisb_type_4_store_d1
+		movfw	RX_MIDI_BYTE
+		banksel	SYSEX_YY
+		movwf	SYSEX_D1
+		clrf	SYSEX_YY
+		banksel	PORTA
+; store the complete chunk
+		call	store_sysex_chunk
+; chunk is complete, roll the bytecount back to 0
+		clrf	INBOUND_BYTECOUNT
+		goto	process_inbound_midi_next
+
+; nn is a special case, since nn goes from 03h-1Dh.
+pisb_type_4_store_nn
+
+;		movlw	0x1A
+;		banksel	SYSEX_NN
+;		movwf	SYSEX_NN
+;		banksel	PORTA
+;		incf	INBOUND_BYTECOUNT,f
+;		goto	process_inbound_midi_next
+
+		movlw	0x03
+		subwf	RX_MIDI_BYTE,w
+		bnc		pisb_error
+		movfw	RX_MIDI_BYTE
+		sublw	MAX_REGISTER
+		bnc		pisb_error
+		movfw	RX_MIDI_BYTE
+		banksel	SYSEX_NN
+		movwf	SYSEX_NN
+		clrf	SYSEX_TT
 		banksel	PORTA
 		incf	INBOUND_BYTECOUNT,f
 		goto	process_inbound_midi_next
